@@ -1,0 +1,14 @@
+[project]
+name = "llm-rg"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=4.8.5",
+    "numpy>=2.2.6",
+    "pytest>=9.0.3",
+    "torch>=2.12.0",
+    "tqdm>=4.67.3",
+    "transformers>=5.9.0",
+]
