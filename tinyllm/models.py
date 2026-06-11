@@ -117,3 +117,19 @@ class DecoderTransformer(nn.Module):
     
     def save(self, path):
         torch.save(self.state_dict(), path)
+
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
+        return self
+    
+    def generate(self, prompt, encoder, decoder, max_new_tokens=100):
+        self.eval()
+        input_ids = torch.tensor([encoder[c] for c in prompt], dtype=torch.long).unsqueeze(0).to("cuda")
+        for _ in range(max_new_tokens):
+            with torch.no_grad():
+                logits = self(input_ids[:, -self.positional_embedding.num_embeddings:])
+                next_token_logits = logits[:, -1, :]
+                next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
+                input_ids = torch.cat([input_ids, next_token_id], dim=1)
+        generated_text = ''.join([decoder[ix.item()] for ix in input_ids[0]])
+        return generated_text
