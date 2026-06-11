@@ -9,7 +9,7 @@ from tinyllm.models import Config, DecoderTransformer
 def data_loader(data, batch_size, seq_len):
     n = len(data)
     # Randomly sample starting indices for each sequence in the batch
-    start_indices = np.random.randint(0, n - seq_len - 1, size=batch_size)
+    start_indices = np.random.choice(n - seq_len - 1, size=batch_size, replace=False)
     x_batch = np.array([data[i:i+seq_len] for i in start_indices])
     y_batch = np.array([data[i+1:i+seq_len+1] for i in start_indices])
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -18,7 +18,7 @@ def data_loader(data, batch_size, seq_len):
     return x_batch, y_batch
 
 
-def train(model, train_data, batch_size, seq_len, num_iters, optimizer, scheduler, vocab_size, test_data, checkpoint_path=None):
+def train(model, train_data, batch_size, seq_len, num_iters, optimizer, scheduler, vocab_size, test_data, checkpoint_path, encoder, decoder):
     scaler = torch.cuda.amp.GradScaler()
     t0 = time()
     for it in range(num_iters):
@@ -40,6 +40,8 @@ def train(model, train_data, batch_size, seq_len, num_iters, optimizer, schedule
                 test_loss = torch.nn.functional.cross_entropy(model(x_eval).view(-1, vocab_size), y_eval.view(-1).long())
                 print(f"Iter: {it}, Train loss: {loss.item()}, Eval Loss: {test_loss.item()}, "
                       f"Time: {time() - t0:.2f}, Gradient Norm: {total_norm:.2f}")
+                model.save(checkpoint_path)
+                print(model.generate("To be, or not to be, that is the question:", encoder, decoder, max_new_tokens=100))
                 model.train()
             t0 = time()
     model.save(check_point_path) 
@@ -62,7 +64,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(model.parameters())
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_iters)
     model.train()
-    train(model, train_data, batch_size=batch_size, seq_len=config.block_size, num_iters=num_iters, optimizer=optimizer, scheduler=scheduler, vocab_size=vocab_size, test_data=test_data)
+    train(model, train_data, batch_size=batch_size, seq_len=config.block_size, num_iters=num_iters, optimizer=optimizer, scheduler=scheduler, vocab_size=vocab_size, test_data=test_data, checkpoint_path=check_point_path, encoder=encoder, decoder=decoder)
     model = model.load(check_point_path)
     model.eval()
     print(model.generate("To be, or not to be, that is the question:", encoder, decoder, max_new_tokens=100))
