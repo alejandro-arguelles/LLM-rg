@@ -102,22 +102,6 @@ uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakesp
 `-- README.md
 ```
 
-## Development
-
-Run tests with:
-
-```bash
-uv run pytest
-```
-
-As the project grows, keep experiment scripts reproducible by documenting:
-
-- input datasets and preprocessing steps
-- model and tokenizer choices
-- training configuration
-- hardware assumptions
-- output artifacts and evaluation metrics
-
 ## License
 
 This project is licensed under the BSD 3-Clause License. See
