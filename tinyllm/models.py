@@ -15,9 +15,9 @@ class Config:
 class AttentionHead(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
-        self.key = nn.Linear(config.embed_dim, config.head_size)
-        self.query = nn.Linear(config.embed_dim, config.head_size)
-        self.value = nn.Linear(config.embed_dim, config.head_size)
+        self.key = nn.Linear(config.embed_dim, config.head_size, bias=False)
+        self.query = nn.Linear(config.embed_dim, config.head_size, bias=False)
+        self.value = nn.Linear(config.embed_dim, config.head_size, bias=False)
         self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size, dtype=torch.bool)))
         self.dropout = nn.Dropout(0.1)
     
@@ -33,25 +33,25 @@ class AttentionHead(nn.Module):
         out = att @ v
         return out
 
+# class CausalSelfAttention(nn.Module):
+#     def __init__(self, config: Config):
+#         super().__init__()
+#         self.head = nn.ModuleList([AttentionHead(config) for _ in range(config.num_heads)])
+#         self.proj = nn.Linear(config.num_heads * config.head_size, config.embed_dim, bias=False)
+#         self.dropout = nn.Dropout(0.1)
+
+#     def forward(self, x):
+#         head_outputs = [head(x) for head in self.head]
+#         concat = torch.cat(head_outputs, dim=-1)
+#         concat = self.proj(concat)
+#         concat = self.dropout(concat)
+#         return concat
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
-        self.head = nn.ModuleList([AttentionHead(config) for _ in range(config.num_heads)])
-        self.proj = nn.Linear(config.num_heads * config.head_size, config.embed_dim)
-        self.dropout = nn.Dropout(0.1)
-
-    def forward(self, x):
-        head_outputs = [head(x) for head in self.head]
-        concat = torch.cat(head_outputs, dim=-1)
-        concat = self.proj(concat)
-        concat = self.dropout(concat)
-        return concat
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config: Config):
-        super().__init__()
-        self.kqv = nn.Linear(config.embed_dim, 3 * config.head_size * config.num_heads)
-        self.proj = nn.Linear(config.head_size * config.num_heads, config.embed_dim)
+        self.kqv = nn.Linear(config.embed_dim, 3 * config.head_size * config.num_heads, bias=False)
+        self.proj = nn.Linear(config.head_size * config.num_heads, config.embed_dim, bias=False)
         self.dropout = nn.Dropout(0.1)
         self.config = config
 
@@ -78,10 +78,10 @@ class AttentionBlock(nn.Module):
         self.attn = CausalSelfAttention(config)
         self.ln1 = nn.LayerNorm(config.embed_dim)
         self.mlp = nn.Sequential(
-            nn.Linear(config.embed_dim, 4 * config.embed_dim),
+            nn.Linear(config.embed_dim, 4 * config.embed_dim, bias=False),
             nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(4 * config.embed_dim, config.embed_dim)
+            nn.Linear(4 * config.embed_dim, config.embed_dim, bias=False)
         )
         self.ln2 = nn.LayerNorm(config.embed_dim)
 
@@ -97,7 +97,7 @@ class DecoderTransformer(nn.Module):
         self.positional_embedding = nn.Embedding(config.block_size, config.embed_dim)
         self.layers = nn.ModuleList([AttentionBlock(config) for _ in range(config.num_layers)])
         self.ln_f = nn.LayerNorm(config.embed_dim)
-        self.head = nn.Linear(config.embed_dim, config.vocab_size)
+        self.head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
         self.dropout = nn.Dropout(0.1)
 
         # Tie weights between token embedding and output head
@@ -122,14 +122,13 @@ class DecoderTransformer(nn.Module):
         self.load_state_dict(torch.load(path))
         return self
     
-    def generate(self, prompt, encoder, decoder, max_new_tokens=100):
+    def generate(self, prompt, max_new_tokens=100):
         self.eval()
-        input_ids = torch.tensor([encoder[c] for c in prompt], dtype=torch.long).unsqueeze(0).to("cuda")
+        input_ids = prompt
         for _ in range(max_new_tokens):
             with torch.no_grad():
                 logits = self(input_ids[:, -self.positional_embedding.num_embeddings:])
                 next_token_logits = logits[:, -1, :]
                 next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
                 input_ids = torch.cat([input_ids, next_token_id], dim=1)
-        generated_text = ''.join([decoder[ix.item()] for ix in input_ids[0]])
-        return generated_text
+        return input_ids[0]
