@@ -1,17 +1,22 @@
 # LLM-rg
 
-LLM-rg is an early-stage Python workspace for language-model research
-experiments. The repository is currently scaffolded for data preparation and
-pretraining work, with project dependencies managed through `uv`.
+LLM-rg is a small Python workspace for training and evaluating tiny
+decoder-only language models. The project includes a Shakespeare training setup
+and larger training configurations that can be selected from the training entry
+point.
 
 ## Current Status
 
-This project is still in its initial setup phase.
-
-- `data/prepare.py` exists as the expected entry point for dataset preparation.
-- `pretraining/` is reserved for model training and experiment code.
-- The dependency set already includes common LLM research tools such as
-  `datasets`, `torch`, `transformers`, `numpy`, `tqdm`, and `pytest`.
+- `tinyllm/train.py` contains the main training loop and experiment
+  configurations.
+- The default training entry point runs `train_shakespeare()`.
+- Training checkpoints are written under `checkpoints/` by the training
+  functions in `tinyllm/train.py`.
+- Larger training runs can be configured in `tinyllm/train.py` by replacing the
+  call to `train_shakespeare()` with another training function, for example a
+  `train_something()` configuration.
+- The project uses `torch`, `numpy`, `tiktoken`, `datasets`, `transformers`,
+  `tqdm`, and `pytest`.
 
 ## Requirements
 
@@ -40,13 +45,58 @@ If you prefer to activate the environment manually:
 source .venv/bin/activate
 ```
 
+## Running
+
+Prepare the Shakespeare dataset first:
+
+```bash
+uv run python scripts/create_shakespeare_dataset.py
+```
+
+Then run the default training job from the repository root:
+
+```bash
+uv run python -m tinyllm.train
+```
+
+By default this launches the Shakespeare training configuration. To run a larger
+project, edit `tinyllm/train.py` and change the final call from
+`train_shakespeare()` to the training configuration you want to use, such as
+`train_something()`.
+
+## Evaluation
+
+After training has produced a checkpoint, evaluate it on HellaSwag with:
+
+```bash
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakespeare.pth --tokenizer shakespeare
+```
+
+For a model trained with the GPT-2 tokenizer, use:
+
+```bash
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2
+```
+
+The script evaluates the `validation` split by default. For a quick smoke test,
+limit the number of examples:
+
+```bash
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakespeare.pth --tokenizer shakespeare --max-examples 100
+```
+
 ## Project Layout
 
 ```text
 .
-|-- data/
-|   `-- prepare.py       # Dataset preparation entry point
-|-- pretraining/         # Pretraining experiments and training code
+|-- tinyllm/
+|   |-- train.py         # Training loop and experiment configurations
+|   |-- models.py        # Decoder transformer model
+|   |-- load_data.py     # Dataset loading utilities
+|   `-- hellaswag.py     # HellaSwag evaluation utilities
+|-- datasets/            # Prepared local datasets
+|-- scripts/             # Dataset and evaluation scripts
+|-- checkpoints/         # Local model checkpoints
 |-- pyproject.toml       # Project metadata and dependencies
 |-- uv.lock              # Locked dependency versions
 `-- README.md
