@@ -52,7 +52,7 @@ def train_shakespeare():
     encoder = lambda s: [ch_to_ix[c] for c in s]
     decoder = lambda ids: ''.join([ix_to_ch[i] for i in ids.tolist()])
     batch_size = 512
-    num_iters = 10000
+    num_iters = 500
     config = Config(vocab_size=vocab_size, embed_dim=256, num_heads=8, head_size=32, block_size=512, num_layers=6)
     train_loader = data_loader(train_data, batch_size=batch_size, seq_len=config.block_size)
     eval_loader = data_loader(test_data, batch_size=batch_size, seq_len=config.block_size)
@@ -101,4 +101,4 @@ def train_climbing():
 
 
 if __name__ == "__main__":
-    train_shakespeare()
+    train_climbing()

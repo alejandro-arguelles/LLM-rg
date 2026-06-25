@@ -112,3 +112,47 @@ uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakesp
 
 This project is licensed under the BSD 3-Clause License. See
 [`LICENSE`](LICENSE) for details.
+
+
+
+source $HOME/.local/bin/env so that it works in remote machine before doing de uv sync
+
+
+-------------climb
+export PATH="$HOME/.local/bin:$PATH"
+cd /root/LLM-rg
+
+# 1) cargar dataset = comprobar que los parquets están
+ls /home/criteo/.cache/nanochat/base_data_climbmix/*.parquet | head
+
+# 2) entrenar (ajusta BATCH a tu GPU; 64 necesita ~A100 80GB)
+DATA_DIR=/home/criteo/.cache/nanochat/base_data_climbmix BATCH=8 NUM_ITERS=500 \
+  PYTHONPATH=. uv run python /tmp/run_climbing.py
+
+# 3) evaluar en HellaSwag
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 200
+
+
+--------------------climb
+
+
+
+export PATH="$HOME/.local/bin:$PATH"
+cd /root/LLM-rg
+
+# Descarga 10 shards (~0.9 GB, ~4B tokens) — cuidado: solo te quedan ~5GB de disco
+uv run python -c "
+from huggingface_hub import hf_hub_download
+import os; os.makedirs('/root/climbmix', exist_ok=True)
+for i in range(10):
+    hf_hub_download(repo_id='karpathy/climbmix-400b-shuffle', repo_type='dataset',
+                    filename=f'shard_{i:05d}.parquet', local_dir='/root/climbmix')
+print('listo')
+"
+
+NUM_ITERS=20000 PYTHONPATH=. uv run python /tmp/run_climbing.py
+
+
+
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 200
+
