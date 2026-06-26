@@ -54,7 +54,10 @@ args = parser.parse_args()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer = ShakespeareTokenizer() if args.tokenizer == "shakespeare" else tiktoken.get_encoding("gpt2")
 
-state_dict = torch.load(args.checkpoint, map_location=device)
+ckpt = torch.load(args.checkpoint, map_location=device)
+# New checkpoints wrap the weights in a dict (model/optimizer/scheduler/iter);
+# legacy ones are a bare state_dict.
+state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 config = infer_config(state_dict, args.block_size)
 if args.head_size is not None:
     config.head_size = args.head_size
@@ -62,7 +65,7 @@ if args.head_size is not None:
 print(f"Inferred config: {config}")
 
 model = DecoderTransformer(config).to(device)
-model.load(args.checkpoint)
+model.load_state_dict(state_dict)
 model.eval()
 
 print(f"Loaded checkpoint: {args.checkpoint}")

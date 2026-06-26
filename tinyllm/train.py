@@ -1,4 +1,5 @@
 import os
+import math
 import tiktoken
 import sys
 from time import time
@@ -9,36 +10,92 @@ from tinyllm.models import Config, DecoderTransformer
 from tinyllm.load_data import data_loader, list_parquet_files
 
 
-def train(model, train_loader, batch_size, seq_len, num_iters, optimizer, scheduler, vocab_size, eval_loader, checkpoint_path, encoder=None, decoder=None):
-    scaler = torch.cuda.amp.GradScaler()
+def get_warmup_cosine_scheduler(optimizer, warmup_iters, num_iters, min_lr_ratio=0.1):
+    """Linear warmup followed by cosine decay, as a multiplier on the base lr.
+
+    - For it < warmup_iters the factor ramps linearly 0 -> 1.
+    - Afterwards it follows half a cosine from 1 down to min_lr_ratio over the
+      remaining iterations.
+    """
+    def lr_lambda(it):
+        if it < warmup_iters:
+            return (it + 1) / warmup_iters
+        progress = (it - warmup_iters) / max(1, num_iters - warmup_iters)
+        progress = min(progress, 1.0)
+        return min_lr_ratio + 0.5 * (1 - min_lr_ratio) * (1 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def save_checkpoint(path, model, optimizer, scheduler, it):
+    """Save a full training checkpoint (weights + optimizer + scheduler + iter).
+
+    Written atomically (tmp file + rename) so a crash mid-write can't leave a
+    truncated checkpoint behind.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    torch.save({
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "iter": it,
+    }, tmp)
+    os.replace(tmp, path)
+
+
+def load_checkpoint(path, model, optimizer=None, scheduler=None, map_location=None):
+    """Load a checkpoint. Restores optimizer/scheduler too if given.
+
+    Returns the iteration to resume from (0 for legacy weights-only files).
+    """
+    ckpt = torch.load(path, map_location=map_location)
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+        if optimizer is not None and ckpt.get("optimizer") is not None:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        if scheduler is not None and ckpt.get("scheduler") is not None:
+            scheduler.load_state_dict(ckpt["scheduler"])
+        return ckpt.get("iter", 0)
+    # Legacy format: a bare state_dict saved by model.save().
+    model.load_state_dict(ckpt)
+    return 0
+
+
+def train(model, train_loader, batch_size, seq_len, num_iters, optimizer, scheduler, vocab_size, eval_loader, checkpoint_path, encoder=None, decoder=None, start_iter=0, checkpoint_interval=1000):
     t0 = time()
-    for it in range(num_iters):
+    for it in range(start_iter, num_iters):
         x_batch, y_batch = next(train_loader)
-        with torch.autocast(device_type="cuda"):
+        # bf16 autocast: same exponent range as fp32, so activations don't
+        # overflow to inf/nan and no GradScaler is needed.
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             logits = model(x_batch)
             loss = torch.nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), y_batch.view(-1).long())
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
+        loss.backward()
         total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        # Skip the step on a non-finite gradient so one bad batch can't
+        # permanently corrupt the weights (GradScaler used to do this for us).
+        if torch.isfinite(total_norm):
+            optimizer.step()
         scheduler.step()
         if it % 100 == 0:
             with torch.no_grad():
                 x_eval, y_eval = next(eval_loader)
                 model.eval()
-                test_loss = torch.nn.functional.cross_entropy(model(x_eval).view(-1, vocab_size), y_eval.view(-1).long())
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    test_loss = torch.nn.functional.cross_entropy(model(x_eval).view(-1, vocab_size), y_eval.view(-1).long())
                 print(f"Iter: {it}, Train loss: {loss.item()}, Eval Loss: {test_loss.item()}, "
-                      f"Time: {time() - t0:.2f}, Gradient Norm: {total_norm:.2f}")
-                model.save(checkpoint_path)
-                prompt = "To be, or not to be, that is the question:"
+                      f"Time: {time() - t0:.2f}, Gradient Norm: {total_norm:.2f}", flush=True)
+                prompt = "What is the purpose of life?"
                 input_ids = torch.tensor([encoder(prompt)], dtype=torch.long).to("cuda")
                 output_ids = model.generate(input_ids, max_new_tokens=100)
-                print(decoder(output_ids))
+                print(decoder(output_ids), flush=True)
                 model.train()
             t0 = time()
-    model.save(checkpoint_path) 
+        if it % checkpoint_interval == 0:
+            save_checkpoint(checkpoint_path, model, optimizer, scheduler, it)
+    save_checkpoint(checkpoint_path, model, optimizer, scheduler, num_iters)
 
 def train_shakespeare():
     torch.set_float32_matmul_precision('high')
@@ -63,9 +120,10 @@ def train_shakespeare():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_iters)
     model.train()
     train(model, train_loader, batch_size=batch_size, seq_len=config.block_size, num_iters=num_iters, optimizer=optimizer, scheduler=scheduler, vocab_size=vocab_size, eval_loader=eval_loader, checkpoint_path=check_point_path, encoder=encoder, decoder=decoder)
-    model = model.load(check_point_path)
+    load_checkpoint(check_point_path, model, map_location=device)
     model.eval()
-    prompt = "To be or not to be, that is the question:"
+    prompt = "What is the most fundamental thing about the universe?"
+
     input_ids = torch.tensor([encoder(prompt)], dtype=torch.long).to("cuda")
     output_ids = model.generate(input_ids, max_new_tokens=100)
     print(decoder(output_ids))
@@ -87,14 +145,17 @@ def train_climbing():
     train_loader = data_loader(all_files[:split], batch_size=batch_size, seq_len=config.block_size, dataset='climbing', tokenizer=tokenizer)
     eval_loader = data_loader(all_files[split:], batch_size=batch_size, seq_len=config.block_size, dataset='climbing', tokenizer=tokenizer)
     model = DecoderTransformer(config).to(device)
-    model = torch.compile(model)
-    optimizer = torch.optim.AdamW(model.parameters())
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_iters)
+    # NOTE: torch.compile disabled -- with autocast bf16 it destabilises training
+    # here (logits grow unbounded -> nan). The eager path trains cleanly.
+    # model = torch.compile(model)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=6e-4, betas=(0.9, 0.95), weight_decay=0.1)
+    warmup_iters = min(2000, num_iters // 10)
+    scheduler = get_warmup_cosine_scheduler(optimizer, warmup_iters=warmup_iters, num_iters=num_iters)
     model.train()
     train(model, train_loader, batch_size=batch_size, seq_len=config.block_size, num_iters=num_iters, optimizer=optimizer, scheduler=scheduler, vocab_size=vocab_size, eval_loader=eval_loader, checkpoint_path=check_point_path, encoder=encoder, decoder=decoder)
-    model = model.load(check_point_path)
+    load_checkpoint(check_point_path, model, map_location=device)
     model.eval()
-    prompt = "To be or not to be, that is the question:"
+    prompt = "What is the most fundamental thing about the universe?"
     input_ids = torch.tensor([encoder(prompt)], dtype=torch.long).to(device)
     output_ids = model.generate(input_ids, max_new_tokens=100)
     print(decoder(output_ids))

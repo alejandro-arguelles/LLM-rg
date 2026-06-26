@@ -80,6 +80,20 @@ source .venv/bin/activate
 
 ## Running
 
+### Climbing model
+
+Download the dataset (see Setup with `--data`) and train with the helper script:
+
+```bash
+bash train.sh                          # 500 iterations, data in $HOME/climbmix
+bash train.sh --iter 1000              # more iterations
+bash train.sh --iter 500 --batch 8 --data /path/to/climbmix
+```
+
+The checkpoint is written to `checkpoints/tinyllm_climbing.pth`.
+
+### Shakespeare model
+
 Prepare the Shakespeare dataset first:
 
 ```bash
@@ -108,7 +122,10 @@ uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakesp
 For a model trained with the GPT-2 tokenizer, use:
 
 ```bash
-uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 100
+
+
+uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 
 ```
 
 The script evaluates the `validation` split by default. For a quick smoke test,
@@ -130,6 +147,8 @@ uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_shakesp
 |-- datasets/            # Prepared local datasets
 |-- scripts/             # Dataset and evaluation scripts
 |-- checkpoints/         # Local model checkpoints
+|-- setup.sh             # Install uv + dependencies (and optionally data)
+|-- train.sh             # Train the climbing model
 |-- pyproject.toml       # Project metadata and dependencies
 |-- uv.lock              # Locked dependency versions
 `-- README.md
@@ -142,44 +161,21 @@ This project is licensed under the BSD 3-Clause License. See
 
 
 
-source $HOME/.local/bin/env so that it works in remote machine before doing de uv sync
-
-
--------------climb
-export PATH="$HOME/.local/bin:$PATH"
-cd /root/LLM-rg
-
-# 1) cargar dataset = comprobar que los parquets están
-ls /home/criteo/.cache/nanochat/base_data_climbmix/*.parquet | head
-
-# 2) entrenar (ajusta BATCH a tu GPU; 64 necesita ~A100 80GB)
-DATA_DIR=/home/criteo/.cache/nanochat/base_data_climbmix BATCH=8 NUM_ITERS=500 \
+---------to resume
+RESUME=1 DATA_DIR=$HOME/climbmix BATCH=64 NUM_ITERS=600000 \
   PYTHONPATH=. uv run python scripts/run_climbing.py
 
-# 3) evaluar en HellaSwag
-uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 200
 
 
---------------------climb
+------- TO ANALYZE -----------
 
+Cómo usarlo
 
+# todo (por defecto en CPU, para no molestar al entrenamiento en GPU)
+PYTHONPATH=. uv run python tinyllm/analyzer.py --all
 
-export PATH="$HOME/.local/bin:$PATH"
-cd /root/LLM-rg
+# solo evolución, con tu prompt
+PYTHONPATH=. uv run python tinyllm/analyzer.py --evolution --prompt "Climbing is"
 
-# Descarga 10 shards (~0.9 GB, ~4B tokens) — cuidado: solo te quedan ~5GB de disco
-uv run python -c "
-from huggingface_hub import hf_hub_download
-import os; os.makedirs('/root/climbmix', exist_ok=True)
-for i in range(10):
-    hf_hub_download(repo_id='karpathy/climbmix-400b-shuffle', repo_type='dataset',
-                    filename=f'shard_{i:05d}.parquet', local_dir='/root/climbmix')
-print('listo')
-"
-
-NUM_ITERS=500 PYTHONPATH=. uv run python /root/LLM-rg/scripts/run_climbing.py
-
-
-
-uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 200
-
+# atención con capas/heads concretos
+PYTHONPATH=. uv run python tinyllm/analyzer.py --attention --layers 0,5,11 --heads 0,3,7,11
