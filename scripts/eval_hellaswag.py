@@ -14,9 +14,11 @@ from tinyllm.models import Config, DecoderTransformer
 from tinyllm.hellaswag import evaluate_hellaswag
 
 
-def infer_config(state_dict):
+def infer_config(state_dict, block_size):
     vocab_size, embed_dim = state_dict["token_embedding.weight"].shape
-    block_size, _ = state_dict["positional_embedding.weight"].shape
+    # block_size cannot be inferred from the checkpoint anymore: RoPE replaced
+    # the learned positional embedding table and its cos/sin buffers are not
+    # persisted. It is supplied explicitly instead.
     num_layers = sum(1 for k in state_dict if k.startswith("layers.") and k.endswith(".attn.kqv.weight"))
     bias = any("bias" in k for k in state_dict)
     head_size = 64
@@ -46,13 +48,14 @@ parser.add_argument("--tokenizer", type=str, default="shakespeare", choices=["gp
 parser.add_argument("--split", type=str, default="validation", choices=["train", "validation"])
 parser.add_argument("--max-examples", type=int, default=None, help="limit number of examples (default: full split)")
 parser.add_argument("--head-size", type=int, default=None, help="override head size (inferred as 64 by default)")
+parser.add_argument("--block-size", type=int, default=512, help="context length the model was trained with")
 args = parser.parse_args()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer = ShakespeareTokenizer() if args.tokenizer == "shakespeare" else tiktoken.get_encoding("gpt2")
 
 state_dict = torch.load(args.checkpoint, map_location=device)
-config = infer_config(state_dict)
+config = infer_config(state_dict, args.block_size)
 if args.head_size is not None:
     config.head_size = args.head_size
     config.num_heads = config.embed_dim // args.head_size

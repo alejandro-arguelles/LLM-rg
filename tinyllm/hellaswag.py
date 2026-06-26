@@ -14,7 +14,7 @@ def evaluate_hellaswag(model, tokenizer, device, split="validation", max_example
     if max_examples is not None:
         dataset = dataset.select(range(min(max_examples, len(dataset))))
 
-    block_size = model.positional_embedding.num_embeddings
+    block_size = model.config.block_size
     model.eval()
     correct = 0
 

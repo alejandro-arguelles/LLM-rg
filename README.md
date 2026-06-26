@@ -127,7 +127,7 @@ ls /home/criteo/.cache/nanochat/base_data_climbmix/*.parquet | head
 
 # 2) entrenar (ajusta BATCH a tu GPU; 64 necesita ~A100 80GB)
 DATA_DIR=/home/criteo/.cache/nanochat/base_data_climbmix BATCH=8 NUM_ITERS=500 \
-  PYTHONPATH=. uv run python /tmp/run_climbing.py
+  PYTHONPATH=. uv run python scripts/run_climbing.py
 
 # 3) evaluar en HellaSwag
 uv run python -m scripts.eval_hellaswag --checkpoint checkpoints/tinyllm_climbing.pth --tokenizer gpt2 --max-examples 200
@@ -150,7 +150,7 @@ for i in range(10):
 print('listo')
 "
 
-NUM_ITERS=20000 PYTHONPATH=. uv run python /tmp/run_climbing.py
+NUM_ITERS=500 PYTHONPATH=. uv run python /root/LLM-rg/scripts/run_climbing.py
 
 
 

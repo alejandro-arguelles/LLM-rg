@@ -48,6 +48,48 @@ class AttentionHead(nn.Module):
 #         concat = self.dropout(concat)
 #         return concat
 
+class RotaryEmbedding(nn.Module):
+    """Rotary Position Embedding (RoPE, Su et al., 2021).
+
+    Encodes absolute position by rotating pairs of features in q/k by an
+    angle proportional to the position, so the dot product in attention only
+    depends on the *relative* offset between tokens. No learned parameters and
+    it extrapolates better than learned positional embeddings.
+    """
+    def __init__(self, dim: int, max_seq_len: int, base: float = 10000.0):
+        super().__init__()
+        assert dim % 2 == 0, "RoPE requires an even head dimension"
+        # Inverse frequencies for each pair of dimensions: theta_i = base^(-2i/dim).
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        t = torch.arange(max_seq_len).float()
+        freqs = torch.outer(t, inv_freq)  # (max_seq_len, dim/2)
+        # Duplicate so each angle covers both halves of the feature vector.
+        emb = torch.cat((freqs, freqs), dim=-1)  # (max_seq_len, dim)
+        self.register_buffer("cos", emb.cos(), persistent=False)
+        self.register_buffer("sin", emb.sin(), persistent=False)
+
+    def forward(self, seq_len):
+        return self.cos[:seq_len], self.sin[:seq_len]
+
+
+def rotate_half(x):
+    """Rotate the two halves of the last dimension: [x1, x2] -> [-x2, x1]."""
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary(q, k, cos, sin):
+    """Apply rotary embeddings to query/key tensors of shape (B, nh, T, hs).
+
+    cos/sin are (T, hs); broadcast over batch and head dims.
+    """
+    cos = cos[None, None, :, :]
+    sin = sin[None, None, :, :]
+    q = (q * cos) + (rotate_half(q) * sin)
+    k = (k * cos) + (rotate_half(k) * sin)
+    return q, k
+
+
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization (Zhang & Sennrich, 2019).
 
@@ -76,6 +118,8 @@ class CausalSelfAttention(nn.Module):
         self.proj.RESIDUAL_SCALE = True
         self.dropout = nn.Dropout(0.1)
         self.config = config
+        # Rotary position embeddings applied to q/k per head.
+        self.rope = RotaryEmbedding(config.head_size, config.block_size)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -86,6 +130,8 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.config.num_heads, self.config.head_size).transpose(1, 2)
         v = v.view(B, T, self.config.num_heads, self.config.head_size).transpose(1, 2)
         # q is (B, num_heads, T, head_size)
+        cos, sin = self.rope(T)
+        q, k = apply_rotary(q, k, cos, sin)
         y = F.scaled_dot_product_attention(q, k, v,
          dropout_p=0.1 if self.training else 0.0, is_causal=True)
         y = y.transpose(1, 2).contiguous().view(B, T, self.config.num_heads * self.config.head_size)
@@ -138,7 +184,8 @@ class DecoderTransformer(nn.Module):
         super().__init__()
         self.config = config
         self.token_embedding = nn.Embedding(config.vocab_size, config.embed_dim)
-        self.positional_embedding = nn.Embedding(config.block_size, config.embed_dim)
+        # Position information is injected via RoPE inside attention, so there
+        # is no learned positional embedding table here.
         self.layers = nn.ModuleList([AttentionBlock(config) for _ in range(config.num_layers)])
         self.ln_f = RMSNorm(config.embed_dim)
         self.head = nn.Linear(config.embed_dim, config.vocab_size, bias=False)
@@ -168,9 +215,7 @@ class DecoderTransformer(nn.Module):
 
     def forward(self, x):
         batch_size, seq_len = x.shape
-        token_emb = self.token_embedding(x)
-        pos_emb = self.positional_embedding(torch.arange(seq_len, device=x.device))
-        x = token_emb + pos_emb
+        x = self.token_embedding(x)
         x = self.dropout(x)
         for layer in self.layers:
             x = layer(x)
@@ -197,7 +242,7 @@ class DecoderTransformer(nn.Module):
         self.eval()
         input_ids = prompt
         for _ in range(max_new_tokens):
-            logits = self(input_ids[:, -self.positional_embedding.num_embeddings:])
+            logits = self(input_ids[:, -self.config.block_size:])
             next_token_logits = logits[:, -1, :]
 
             if temperature == 0.0:
