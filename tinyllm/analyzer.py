@@ -579,6 +579,87 @@ def plot_cluster_evolution(model, tokenizer, groups, device, out_dir, pool="mean
 
 
 # --------------------------------------------------------------------------- #
+# Analysis 1e -- export sentence-final-period embeddings for the
+# TensorFlow Embedding Projector  (https://projector.tensorflow.org)
+# --------------------------------------------------------------------------- #
+def sample_texts(tokenizer, data_dir, n, max_tokens, seed=0):
+    """Sample n dataset sentences, each forced to end in a period token.
+
+    Returns a list of (ids, text):
+      - ids:  token ids truncated to (max_tokens-1), then a '.' token appended,
+              so the FINAL position is always the sentence-ending period.
+      - text: tokenizer.decode(ids) -- exactly what produced the vector.
+    """
+    files = list_parquet_files(data_dir)
+    if not files:
+        raise FileNotFoundError(f"No parquet files in {data_dir}")
+    period = tokenizer.encode_ordinary(".")  # gpt2 -> [13]
+    rng = random.Random(seed)
+    out = []
+    for fpath in files:
+        pf = pq.ParquetFile(fpath)
+        for rg in range(pf.num_row_groups):
+            texts = pf.read_row_group(rg, columns=["text"]).column("text").to_pylist()
+            order = list(range(len(texts)))
+            rng.shuffle(order)
+            for idx in order:
+                base = " ".join(texts[idx].split())  # collapse whitespace
+                body = tokenizer.encode_ordinary(base)[:max_tokens - 1]
+                if len(body) < 7:                    # real sentence (+ period -> >=8 tokens)
+                    continue
+                ids = body + period
+                out.append((ids, tokenizer.decode(ids)))
+                if len(out) >= n:
+                    return out
+    return out
+
+
+@torch.no_grad()
+def export_projector(model, tokenizer, data_dir, device, out_dir,
+                     n=1000, max_tokens=64, layer=-1, seed=0):
+    """Write vectors.tsv + metadata.tsv for the TF Embedding Projector.
+
+    For each sentence we take the residual state of the FINAL token (the
+    sentence-ending period) at `layer` (-1 = final block) as its vector. In a
+    causal model that position has attended to the whole sentence, so it acts
+    as a sentence embedding. Load both files at https://projector.tensorflow.org
+    (everything runs client-side) and reduce to 3D with UMAP / t-SNE / PCA.
+    """
+    samples = sample_texts(tokenizer, data_dir, n, max_tokens, seed)
+    if not samples:
+        raise RuntimeError(f"No usable sentences sampled from {data_dir}")
+
+    vecs, labels = [], []
+    for i, (ids, text) in enumerate(samples):
+        ids_t = torch.tensor([ids], dtype=torch.long, device=device)
+        states, _, _ = capture(model, ids_t)            # list of (T, C)
+        vecs.append(states[layer][-1].cpu().numpy())     # final token = period
+        labels.append(text.replace("\t", " ").replace("\n", " ").strip())
+        if (i + 1) % 100 == 0:
+            print(f"  embedded {i + 1}/{len(samples)} sentences")
+
+    V = np.stack(vecs)  # (N, C)
+    layer_name = "emb" if layer == 0 else (f"L{layer}" if layer > 0 else "final")
+
+    vec_path = os.path.join(out_dir, "vectors.tsv")
+    with open(vec_path, "w") as f:
+        for row in V:
+            f.write("\t".join(f"{x:.6g}" for x in row) + "\n")
+
+    # Single column => the Projector uses each line directly as the point label
+    # (NO header line in this case), so the sentence shows up automatically.
+    meta_path = os.path.join(out_dir, "metadata.tsv")
+    with open(meta_path, "w") as f:
+        for label in labels:
+            f.write(label + "\n")
+
+    print(f"  wrote {vec_path}  ({V.shape[0]} x {V.shape[1]}, layer={layer_name})")
+    print(f"  wrote {meta_path}")
+    print("  -> open https://projector.tensorflow.org , click 'Load', pick both "
+          "TSVs, then choose UMAP or t-SNE and set the dimension to 3D.")
+
+
+# --------------------------------------------------------------------------- #
 # Analysis 2 -- attention matrices
 # --------------------------------------------------------------------------- #
 def _attn_cell(ax, A, cmap):
@@ -681,6 +762,12 @@ def main():
                    help="how to pool tokens into one sentence vector for PCA")
     p.add_argument("--cluster-layer", type=int, default=-1,
                    help="layer index for the cluster PCA (0=emb, -1=final)")
+    p.add_argument("--projector-count", type=int, default=1000,
+                   help="how many sentences to embed for the projector export")
+    p.add_argument("--projector-max-tokens", type=int, default=64,
+                   help="max tokens per sentence before the final period")
+    p.add_argument("--projector-layer", type=int, default=-1,
+                   help="layer index for the projector embedding (0=emb, -1=final)")
     p.add_argument("--layers", default="0,5,11", help="comma list for the attention grid")
     p.add_argument("--heads", default="0,3,7,11", help="comma list for the attention grid")
     p.add_argument("--compare-layer", type=int, default=5)
@@ -693,11 +780,15 @@ def main():
     p.add_argument("--clusters", action="store_true")
     p.add_argument("--cluster-evolution", action="store_true")
     p.add_argument("--attention", action="store_true")
+    p.add_argument("--projector", action="store_true",
+                   help="export vectors.tsv + metadata.tsv for projector.tensorflow.org")
     p.add_argument("--all", action="store_true")
     args = p.parse_args()
 
+    # --projector is a standalone export (interactive, heavier); it is never
+    # part of --all and does not trigger the default-everything fallback.
     if not (args.evolution or args.pca or args.clusters
-            or args.cluster_evolution or args.attention):
+            or args.cluster_evolution or args.attention or args.projector):
         args.all = True
 
     set_style()
@@ -726,6 +817,12 @@ def main():
         print("Cluster evolution across layers:")
         plot_cluster_evolution(model, tokenizer, SEMANTIC_GROUPS, device, run_dir,
                                pool=args.pool)
+
+    if args.projector:
+        print("Embedding projector export (sentence-final-period vectors):")
+        export_projector(model, tokenizer, args.data_dir, device, run_dir,
+                         n=args.projector_count, max_tokens=args.projector_max_tokens,
+                         layer=args.projector_layer, seed=args.seed)
 
     if args.all or args.attention:
         print("Attention analysis:")

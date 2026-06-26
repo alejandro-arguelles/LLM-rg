@@ -179,3 +179,28 @@ PYTHONPATH=. uv run python tinyllm/analyzer.py --evolution --prompt "Climbing is
 
 # atención con capas/heads concretos
 PYTHONPATH=. uv run python tinyllm/analyzer.py --attention --layers 0,5,11 --heads 0,3,7,11
+
+
+
+
+
+
+-----------projector
+
+PYTHONPATH=. uv run python tinyllm/analyzer.py \
+    --projector \
+    --ckpt checkpoints/tinyllm_climbing.pth \
+    --data-dir $HOME/climbmix \
+    --projector-count 1000 \
+    --projector-layer -1 \
+    --device cpu
+
+    Abre https://projector.tensorflow.org
+Botón "Load" → sube los dos .tsv (Step 1 = vectors.tsv, Step 2 = metadata.tsv). Todo corre en tu navegador, no se sube nada a ningún servidor.
+Abajo a la izquierda elige UMAP o t-SNE y marca 3D.
+Pasa el ratón por los puntos para ver la frase; usa el buscador y "isolate N points" para inspeccionar zonas / vecinos.
+
+
+
+------------ to resume
+RESUME=1 DATA_DIR=/root/climbmix BATCH=64 NUM_ITERS=600000 PYTHONPATH=. uv run python scripts/run_climbing.py
