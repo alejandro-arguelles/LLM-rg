@@ -27,17 +27,44 @@ The checked-in `.python-version` file pins local development to Python 3.10.
 
 ## Setup
 
-Clone the repository and install the project dependencies:
+Clone the repository and run the setup script. It installs `uv`, makes sure it
+is on the `PATH` (also on remote machines) and installs all dependencies with
+`uv sync`:
 
-Install uv
+```bash
+bash setup.sh
+```
+
+To also download 10 climbmix shards (~0.9 GB) into `$HOME/climbmix` while
+setting up, pass `--data` (override the target with `DATA_DIR`):
+
+```bash
+bash setup.sh --data
+# or pick another directory:
+DATA_DIR=/path/to/climbmix bash setup.sh --data
+```
+
+Remember to pass the same `DATA_DIR` when training, e.g.
+`DATA_DIR=$HOME/climbmix ... uv run python scripts/run_climbing.py`.
+
+<details>
+<summary>Manual setup (if you prefer step by step)</summary>
+
+Install uv:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Get all the needed dependencies
+On remote machines make uv available in the current shell:
+```bash
+source $HOME/.local/bin/env
 ```
+
+Get all the needed dependencies:
+```bash
 uv sync
 ```
+</details>
 
 Then run commands inside the managed environment:
 
