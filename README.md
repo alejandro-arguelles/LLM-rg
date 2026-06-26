@@ -184,11 +184,11 @@ PYTHONPATH=. uv run python tinyllm/analyzer.py --attention --layers 0,5,11 --hea
 
 
 
-
+ s
 -----------projector
 
 PYTHONPATH=. uv run python tinyllm/analyzer.py \
-    --projector \
+    --projector \ 
     --ckpt checkpoints/tinyllm_climbing.pth \
     --data-dir $HOME/climbmix \
     --projector-count 1000 \
